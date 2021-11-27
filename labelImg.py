@@ -14,6 +14,8 @@ import webbrowser as wb
 from functools import partial
 from collections import defaultdict
 
+from matplotlib.figure import Figure
+
 try:
     from PyQt5.QtGui import *
     from PyQt5.QtCore import *
@@ -28,6 +30,11 @@ except ImportError:
         sip.setapi('QVariant', 2)
     from PyQt4.QtGui import *
     from PyQt4.QtCore import *
+import matplotlib
+matplotlib.use('Qt5Agg')
+from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
+import matplotlib.pyplot as plt
+
 
 from libs.combobox import ComboBox
 from libs.resources import *
@@ -78,6 +85,10 @@ class MainWindow(QMainWindow, WindowMixin):
 
     def __init__(self, default_filename=None, default_prefdef_class_file=None, default_save_dir=None):
         super(MainWindow, self).__init__()
+
+        QShortcut("e", self, self.edit_label)
+        QShortcut("s", self, lambda:self.zoom_request(3000))
+
         self.setWindowTitle(__appname__)
 
         # Load setting in the main thread
@@ -160,8 +171,6 @@ class MainWindow(QMainWindow, WindowMixin):
         self.label_list.itemChanged.connect(self.label_item_changed)
         list_layout.addWidget(self.label_list)
 
-
-
         self.dock = QDockWidget(get_str('boxLabelText'), self)
         self.dock.setObjectName(get_str('labels'))
         self.dock.setWidget(label_list_container)
@@ -176,6 +185,14 @@ class MainWindow(QMainWindow, WindowMixin):
         self.file_dock = QDockWidget(get_str('fileList'), self)
         self.file_dock.setObjectName(get_str('files'))
         self.file_dock.setWidget(file_list_container)
+
+        self.figure = plt.figure()
+        self.plt = self.figure.add_subplot()
+        plt.ion()
+        self.fig_canvas = FigureCanvas(self.figure)
+        self.curve_dock = QDockWidget('curve', self)
+        self.curve_dock.setObjectName('curve')
+        self.curve_dock.setWidget(self.fig_canvas)
 
         self.zoom_widget = ZoomWidget()
         self.color_dialog = ColorDialog(parent=self)
@@ -202,10 +219,12 @@ class MainWindow(QMainWindow, WindowMixin):
         self.setCentralWidget(scroll)
         self.addDockWidget(Qt.RightDockWidgetArea, self.dock)
         self.addDockWidget(Qt.RightDockWidgetArea, self.file_dock)
+        self.addDockWidget(Qt.RightDockWidgetArea, self.curve_dock)
         self.file_dock.setFeatures(QDockWidget.DockWidgetFloatable)
 
         self.dock_features = QDockWidget.DockWidgetClosable | QDockWidget.DockWidgetFloatable
         self.dock.setFeatures(self.dock.features() ^ self.dock_features)
+        self.curve_dock.setFeatures(QDockWidget.DockWidgetFloatable)
 
         # Actions
         action = partial(new_action, self)
@@ -236,6 +255,9 @@ class MainWindow(QMainWindow, WindowMixin):
 
         save = action(get_str('save'), self.save_file,
                       'Ctrl+S', 'save', get_str('saveDetail'), enabled=False)
+        open_next_image.triggered.connect(self.file_watcher)
+        open_prev_image.triggered.connect(self.file_watcher)
+        save.triggered.connect(self.file_watcher)
 
         def get_format_meta(format):
             """
@@ -1586,6 +1608,27 @@ class MainWindow(QMainWindow, WindowMixin):
 
     def toggle_draw_square(self):
         self.canvas.set_drawing_shape_to_square(self.draw_squares_option.isChecked())
+
+    def file_watcher(self):
+        if not self.default_save_dir or not self.dir_name:
+            return
+        watch_num = 10
+        file_list = [os.path.join(self.default_save_dir, f) for f in os.listdir(self.default_save_dir)]
+        file_num = len(file_list)
+        if file_num > 11:
+            file_time_list = sorted(os.path.getctime(f) for f in file_list)[-watch_num-1:]
+            delta_time_list = [file_time_list[i+1]-file_time_list[i] for i in range(watch_num)]
+            avg_time = sum(delta_time_list) / len(delta_time_list)
+            time_left = avg_time * (self.img_count - file_num)
+            time_left = "time left: " + \
+                        str(int(time_left // 3600)) + "h" + \
+                        str(int(time_left % 3600 // 60)) + "m" + \
+                        str(int(time_left % 60)) + "s"
+            self.plt.clear()
+            self.plt.grid(True)
+            self.plt.plot(delta_time_list)
+            self.plt.plot(range(watch_num), [avg_time]*watch_num)
+            self.plt.set_title(time_left)
 
 def inverted(color):
     return QColor(*[255 - v for v in color.getRgb()])
