@@ -9,6 +9,7 @@ import re
 import sys
 import subprocess
 import shutil
+from time import time
 import webbrowser as wb
 
 from functools import partial
@@ -57,6 +58,7 @@ from libs.create_ml_io import CreateMLReader
 from libs.create_ml_io import JSON_EXT
 from libs.ustr import ustr
 from libs.hashableQListWidgetItem import HashableQListWidgetItem
+from libs.label_handle import *
 
 __appname__ = 'labelImg'
 
@@ -113,6 +115,9 @@ class MainWindow(QMainWindow, WindowMixin):
         self.last_open_dir = None
         self.cur_img_idx = 0
         self.img_count = 1
+
+        # For speed curve
+        self.speed_data = []
 
         # Whether we need to save or not.
         self.dirty = False
@@ -186,13 +191,43 @@ class MainWindow(QMainWindow, WindowMixin):
         self.file_dock.setObjectName(get_str('files'))
         self.file_dock.setWidget(file_list_container)
 
-        self.figure = plt.figure()
-        self.plt = self.figure.add_subplot()
+        # speed line dock
+        self.speed_curve_fig = plt.figure()
+        self.speed_curve_plt = self.speed_curve_fig.add_subplot()
         plt.ion()
-        self.fig_canvas = FigureCanvas(self.figure)
-        self.curve_dock = QDockWidget('curve', self)
-        self.curve_dock.setObjectName('curve')
-        self.curve_dock.setWidget(self.fig_canvas)
+        self.speed_curve_fig_canvas = FigureCanvas(self.speed_curve_fig)
+        self.speed_curve_dock = QDockWidget('Speed Curve', self)
+        self.speed_curve_dock.setObjectName('curve')
+        self.speed_curve_dock.setWidget(self.speed_curve_fig_canvas)
+
+        # label batch process dock
+        self.batch_export_button = QPushButton('Export Alone')
+        self.batch_export_button.clicked.connect(self.label_batch_export)
+        self.batch_edit_button = QPushButton('Edit Label')
+        self.batch_edit_button.clicked.connect(self.label_batch_edit)
+        self.batch_delete_button = QPushButton('Delete Label')
+        self.batch_delete_button.clicked.connect(self.label_batch_delete)
+        batch_buttons_layout = QHBoxLayout()
+        batch_buttons_layout.addWidget(self.batch_export_button)
+        batch_buttons_layout.addWidget(self.batch_edit_button)
+        batch_buttons_layout.addWidget(self.batch_delete_button)
+        batch_buttons_container = QWidget()
+        batch_buttons_container.setLayout(batch_buttons_layout)
+        self.label_stat_table = QTableWidget()
+        self.label_stat_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.label_stat_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.label_stat_table.setColumnCount(2)
+        self.label_stat_table.setHorizontalHeaderLabels(["Lebel", "Count"])
+        self.label_stat_table.mouseDoubleClickEvent = lambda e: self.label_batch_edit()
+        label_batch_process_layout = QVBoxLayout()
+        label_batch_process_layout.setContentsMargins(0, 0, 0, 0)
+        label_batch_process_layout.addWidget(batch_buttons_container)
+        label_batch_process_layout.addWidget(self.label_stat_table)
+        label_batch_process_container = QWidget()
+        label_batch_process_container.setLayout(label_batch_process_layout)
+        self.label_batch_precess_dock = QDockWidget('Batch Process', self)
+        self.label_batch_precess_dock.setObjectName('batch')
+        self.label_batch_precess_dock.setWidget(label_batch_process_container)
 
         self.zoom_widget = ZoomWidget()
         self.color_dialog = ColorDialog(parent=self)
@@ -219,12 +254,15 @@ class MainWindow(QMainWindow, WindowMixin):
         self.setCentralWidget(scroll)
         self.addDockWidget(Qt.RightDockWidgetArea, self.dock)
         self.addDockWidget(Qt.RightDockWidgetArea, self.file_dock)
-        self.addDockWidget(Qt.RightDockWidgetArea, self.curve_dock)
-        self.file_dock.setFeatures(QDockWidget.DockWidgetFloatable)
+        self.addDockWidget(Qt.RightDockWidgetArea, self.speed_curve_dock)
+        self.addDockWidget(Qt.RightDockWidgetArea, self.label_batch_precess_dock)
+        self.tabifyDockWidget(self.dock, self.label_batch_precess_dock)
 
         self.dock_features = QDockWidget.DockWidgetClosable | QDockWidget.DockWidgetFloatable
         self.dock.setFeatures(self.dock.features() ^ self.dock_features)
-        self.curve_dock.setFeatures(QDockWidget.DockWidgetFloatable)
+        self.file_dock.setFeatures(self.file_dock.features() ^ self.dock_features)
+        self.speed_curve_dock.setFeatures(self.speed_curve_dock.features() ^ self.dock_features)
+        self.label_batch_precess_dock.setFeatures(self.label_batch_precess_dock.features() ^ self.dock_features)
 
         # Actions
         action = partial(new_action, self)
@@ -255,9 +293,6 @@ class MainWindow(QMainWindow, WindowMixin):
 
         save = action(get_str('save'), self.save_file,
                       'Ctrl+S', 'save', get_str('saveDetail'), enabled=False)
-        open_next_image.triggered.connect(self.file_watcher)
-        open_prev_image.triggered.connect(self.file_watcher)
-        save.triggered.connect(self.file_watcher)
 
         def get_format_meta(format):
             """
@@ -1272,6 +1307,7 @@ class MainWindow(QMainWindow, WindowMixin):
 
         if dir_path is not None and len(dir_path) > 1:
             self.default_save_dir = dir_path
+            self.label_watcher()
 
         self.statusBar().showMessage('%s . Annotation will be saved to %s' %
                                      ('Change saved folder', self.default_save_dir))
@@ -1310,6 +1346,8 @@ class MainWindow(QMainWindow, WindowMixin):
             target_dir_path = ustr(default_open_dir_path)
         self.last_open_dir = target_dir_path
         self.import_dir_images(target_dir_path)
+        # Fresh static information
+        self.label_watcher()
 
     def import_dir_images(self, dir_path):
         if not self.may_continue() or not dir_path:
@@ -1453,6 +1491,9 @@ class MainWindow(QMainWindow, WindowMixin):
             self.set_clean()
             self.statusBar().showMessage('Saved to  %s' % annotation_file_path)
             self.statusBar().show()
+            # statics information
+            self.label_watcher()
+            self.file_watcher()
 
     def close_file(self, _value=False):
         if not self.may_continue():
@@ -1612,23 +1653,94 @@ class MainWindow(QMainWindow, WindowMixin):
     def file_watcher(self):
         if not self.default_save_dir or not self.dir_name:
             return
-        watch_num = 10
-        file_list = [os.path.join(self.default_save_dir, f) for f in os.listdir(self.default_save_dir)]
-        file_num = len(file_list)
-        if file_num > 11:
-            file_time_list = sorted(os.path.getctime(f) for f in file_list)[-watch_num-1:]
-            delta_time_list = [file_time_list[i+1]-file_time_list[i] for i in range(watch_num)]
-            avg_time = sum(delta_time_list) / len(delta_time_list)
-            time_left = avg_time * (self.img_count - file_num)
-            time_left = "time left: " + \
-                        str(int(time_left // 3600)) + "h" + \
-                        str(int(time_left % 3600 // 60)) + "m" + \
-                        str(int(time_left % 60)) + "s"
-            self.plt.clear()
-            self.plt.grid(True)
-            self.plt.plot(delta_time_list)
-            self.plt.plot(range(watch_num), [avg_time]*watch_num)
-            self.plt.set_title(time_left)
+        # Time file save
+        if len(self.speed_data) > 11:
+            self.speed_data.pop(0)
+        self.speed_data.append(time())
+        data_count = len(self.speed_data)
+        if data_count < 2:
+            return
+        delta_time_list = [self.speed_data[i+1]-self.speed_data[i] for i in range(data_count-1)]
+        delta_data_count = len(delta_time_list)
+        avg_time = sum(delta_time_list) / delta_data_count
+        # Estimate time left
+        label_file_num = len(os.listdir(self.default_save_dir))
+        time_left = avg_time * (self.img_count - label_file_num)
+        time_left = "Time Left: " + \
+                    str(int(time_left // 3600)) + "h" + \
+                    str(int(time_left % 3600 // 60)) + "m" + \
+                    str(int(time_left % 60)) + "s"
+        # Draw speed curve
+        self.speed_curve_plt.clear()
+        self.speed_curve_plt.grid(True)
+        self.speed_curve_plt.plot(delta_time_list)
+        self.speed_curve_plt.plot(range(delta_data_count), [avg_time]*delta_data_count)
+        self.speed_curve_plt.set_title(time_left)
+
+    def label_watcher(self):
+        label_dict = list_label(self.default_save_dir)
+        self.label_stat_table.clear()
+        self.label_stat_table.setHorizontalHeaderLabels(["Lebel", "Count"])
+        self.label_stat_table.setRowCount(len(label_dict))
+        for i, (label, count) in enumerate(label_dict.items()):
+            label_item = QTableWidgetItem(label)
+            count_item = QTableWidgetItem(str(count))
+            self.label_stat_table.setItem(i, 0, label_item)
+            self.label_stat_table.setItem(i, 1, count_item)
+
+    def label_batch_export(self):
+        dialog = QInputDialog()
+        export_path, flag = dialog.getText(self, "导出到", "导出到", 
+            QLineEdit.EchoMode.Normal, self.default_save_dir, Qt.WindowFlags(), Qt.InputMethodHints())
+        if not flag:
+            return
+        items = [self.label_stat_table.item(i, 0) for i in range(self.label_stat_table.rowCount())]
+        items = set(i.text() for i in items)
+        selected = self.label_stat_table.selectedItems()[::2]
+        selected = set(i.text() for i in selected)
+        del_labels = items - selected
+        del_label(self.default_save_dir, export_path, *del_labels)
+        # 显示状态
+        self.statusBar().showMessage(f'成功导出到{export_path}')
+        self.statusBar().show()
+
+
+    def label_batch_edit(self):
+        selected = self.label_stat_table.selectedItems()
+        dialog = QInputDialog()
+        label_change_to, flag = dialog.getText(self, "修改标签为", "修改标签为", 
+            QLineEdit.EchoMode.Normal, selected[0].text(), Qt.WindowFlags(), Qt.InputMethodHints())
+        if not flag:
+            return
+        for item in selected[::1]:
+            label_from = item.text()
+            change_label(self.default_save_dir, self.default_save_dir, label_from, label_change_to)
+        # Fresh label static
+        self.label_watcher()
+        # 显示状态
+        self.statusBar().showMessage(f'成功修改为{label_change_to}')
+        self.statusBar().show()
+
+    def label_batch_delete(self):
+        message_box = QMessageBox()
+        message_box.setText("删除后无法恢复，请确认！")
+        message_box.setStandardButtons(QMessageBox.StandardButton.Ok | QMessageBox.StandardButton.Cancel)
+        message_box.setDefaultButton(QMessageBox.StandardButton.Cancel)
+        flag = message_box.exec()
+        if flag == QMessageBox.StandardButton.Cancel:
+            # 显示状态
+            self.statusBar().showMessage(f'取消删除')
+            self.statusBar().show()
+            return
+        selected = self.label_stat_table.selectedItems()[::2]
+        del_labels = [i.text() for i in selected]
+        del_label(self.default_save_dir, self.default_save_dir, *del_labels)
+        # Fresh label static
+        self.label_watcher()
+        # 显示状态
+        self.statusBar().showMessage(f'成功删除')
+        self.statusBar().show()
+
 
 def inverted(color):
     return QColor(*[255 - v for v in color.getRgb()])
