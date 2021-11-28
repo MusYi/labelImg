@@ -196,16 +196,16 @@ class MainWindow(QMainWindow, WindowMixin):
         self.speed_curve_plt = self.speed_curve_fig.add_subplot()
         plt.ion()
         self.speed_curve_fig_canvas = FigureCanvas(self.speed_curve_fig)
-        self.speed_curve_dock = QDockWidget('Speed Curve', self)
-        self.speed_curve_dock.setObjectName('curve')
+        self.speed_curve_dock = QDockWidget(get_str('speedCurve'), self)
+        self.speed_curve_dock.setObjectName(get_str('curve'))
         self.speed_curve_dock.setWidget(self.speed_curve_fig_canvas)
 
         # label batch process dock
-        self.batch_export_button = QPushButton('Export Alone')
+        self.batch_export_button = QPushButton(get_str('exportBatch'))
         self.batch_export_button.clicked.connect(self.label_batch_export)
-        self.batch_edit_button = QPushButton('Edit Label')
+        self.batch_edit_button = QPushButton(get_str('editBatch'))
         self.batch_edit_button.clicked.connect(self.label_batch_edit)
-        self.batch_delete_button = QPushButton('Delete Label')
+        self.batch_delete_button = QPushButton(get_str('deleteBatch'))
         self.batch_delete_button.clicked.connect(self.label_batch_delete)
         batch_buttons_layout = QHBoxLayout()
         batch_buttons_layout.addWidget(self.batch_export_button)
@@ -217,7 +217,7 @@ class MainWindow(QMainWindow, WindowMixin):
         self.label_stat_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.label_stat_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.label_stat_table.setColumnCount(2)
-        self.label_stat_table.setHorizontalHeaderLabels(["Lebel", "Count"])
+        self.label_stat_table.setHorizontalHeaderLabels([get_str('tableHeaderLabel'), get_str('tableHeaderCount')])
         self.label_stat_table.mouseDoubleClickEvent = lambda e: self.label_batch_edit()
         label_batch_process_layout = QVBoxLayout()
         label_batch_process_layout.setContentsMargins(0, 0, 0, 0)
@@ -225,8 +225,8 @@ class MainWindow(QMainWindow, WindowMixin):
         label_batch_process_layout.addWidget(self.label_stat_table)
         label_batch_process_container = QWidget()
         label_batch_process_container.setLayout(label_batch_process_layout)
-        self.label_batch_precess_dock = QDockWidget('Batch Process', self)
-        self.label_batch_precess_dock.setObjectName('batch')
+        self.label_batch_precess_dock = QDockWidget(get_str('batchProcess'), self)
+        self.label_batch_precess_dock.setObjectName(get_str('batch'))
         self.label_batch_precess_dock.setWidget(label_batch_process_container)
 
         self.zoom_widget = ZoomWidget()
@@ -1666,7 +1666,7 @@ class MainWindow(QMainWindow, WindowMixin):
         # Estimate time left
         label_file_num = len(os.listdir(self.default_save_dir))
         time_left = avg_time * (self.img_count - label_file_num)
-        time_left = "Time Left: " + \
+        time_left = self.string_bundle.get_string('timeLeft') + \
                     str(int(time_left // 3600)) + "h" + \
                     str(int(time_left % 3600 // 60)) + "m" + \
                     str(int(time_left % 60)) + "s"
@@ -1680,7 +1680,9 @@ class MainWindow(QMainWindow, WindowMixin):
     def label_watcher(self):
         label_dict = list_label(self.default_save_dir)
         self.label_stat_table.clear()
-        self.label_stat_table.setHorizontalHeaderLabels(["Lebel", "Count"])
+        self.label_stat_table.setHorizontalHeaderLabels(
+            [self.string_bundle.get_string('tableHeaderLabel'), 
+             self.string_bundle.get_string('tableHeaderCount')])
         self.label_stat_table.setRowCount(len(label_dict))
         for i, (label, count) in enumerate(label_dict.items()):
             label_item = QTableWidgetItem(label)
@@ -1690,7 +1692,8 @@ class MainWindow(QMainWindow, WindowMixin):
 
     def label_batch_export(self):
         dialog = QInputDialog()
-        export_path, flag = dialog.getText(self, "导出到", "导出到", 
+        export_path, flag = dialog.getText(self,
+            self.string_bundle.get_string('exportTo'), self.string_bundle.get_string('exportTo'),
             QLineEdit.EchoMode.Normal, self.default_save_dir, Qt.WindowFlags(), Qt.InputMethodHints())
         if not flag:
             return
@@ -1701,14 +1704,15 @@ class MainWindow(QMainWindow, WindowMixin):
         del_labels = items - selected
         del_label(self.default_save_dir, export_path, *del_labels)
         # 显示状态
-        self.statusBar().showMessage(f'成功导出到{export_path}')
+        self.statusBar().showMessage(self.string_bundle.get_string('exportSuccessfulTo') + f'{export_path}')
         self.statusBar().show()
 
 
     def label_batch_edit(self):
         selected = self.label_stat_table.selectedItems()
         dialog = QInputDialog()
-        label_change_to, flag = dialog.getText(self, "修改标签为", "修改标签为", 
+        label_change_to, flag = dialog.getText(self,
+            self.string_bundle.get_string('changeLabelTo'), self.string_bundle.get_string('changeLabelTo'),
             QLineEdit.EchoMode.Normal, selected[0].text(), Qt.WindowFlags(), Qt.InputMethodHints())
         if not flag:
             return
@@ -1718,18 +1722,19 @@ class MainWindow(QMainWindow, WindowMixin):
         # Fresh label static
         self.label_watcher()
         # 显示状态
-        self.statusBar().showMessage(f'成功修改为{label_change_to}')
+        self.statusBar().showMessage(
+            self.string_bundle.get_string('changeSuccessfulTo') + f'{label_change_to}')
         self.statusBar().show()
 
     def label_batch_delete(self):
         message_box = QMessageBox()
-        message_box.setText("删除后无法恢复，请确认！")
+        message_box.setText(self.string_bundle.get_string('deleteCheck'))
         message_box.setStandardButtons(QMessageBox.StandardButton.Ok | QMessageBox.StandardButton.Cancel)
         message_box.setDefaultButton(QMessageBox.StandardButton.Cancel)
         flag = message_box.exec()
         if flag == QMessageBox.StandardButton.Cancel:
             # 显示状态
-            self.statusBar().showMessage(f'取消删除')
+            self.statusBar().showMessage(self.string_bundle.get_string('deleteCancel'))
             self.statusBar().show()
             return
         selected = self.label_stat_table.selectedItems()[::2]
@@ -1738,7 +1743,7 @@ class MainWindow(QMainWindow, WindowMixin):
         # Fresh label static
         self.label_watcher()
         # 显示状态
-        self.statusBar().showMessage(f'成功删除')
+        self.statusBar().showMessage(self.string_bundle.get_string('deleteSuccessful'))
         self.statusBar().show()
 
 
